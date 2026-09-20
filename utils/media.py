@@ -1,0 +1,1 @@
+# Video compression, thumbnail generation
