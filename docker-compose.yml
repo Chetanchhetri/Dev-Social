@@ -10,9 +10,15 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql+psycopg2://postgres:postgres_password@db:5432/devsocial_db
+      - REDIS_URL=redis://redis:6379/0
+      - MEDIA_DIR=/app/uploads
+    volumes:
+      - ./uploads:/app/uploads  # Mounts local ./uploads directory inside container
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     restart: always
 
   db:
@@ -33,5 +39,15 @@ services:
       retries: 5
     restart: always
 
+  redis:
+    image: redis:7-alpine
+    container_name: devsocial_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: always
+
 volumes:
   postgres_data:
+  redis_data:

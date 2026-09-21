@@ -1,29 +1,34 @@
 import os
-from pydantic_settings import BaseSettings
+from typing import Optional
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     APP_NAME: str = "DevSocial"
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "super-secret-key-change-in-production-2026")
+    SECRET_KEY: str = "super-secret-key-change-in-production-2026"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
     OTP_EXPIRE_MINUTES: int = 10
 
-    # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL", 
-        "postgresql+psycopg2://postgres:postgres_password@db:5432/devsocial_db"
-    )
+    # Database & Redis
+    DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres_password@localhost:5432/devsocial_db"
+    REDIS_URL: Optional[str] = "redis://localhost:6379/0"
+    MEDIA_DIR: str = "uploads"
 
     # Superadmin Defaults from ENV
-    SUPERADMIN_NAME: str = os.getenv("SUPERADMIN_NAME", "Super Admin")
-    SUPERADMIN_EMAIL: str = os.getenv("SUPERADMIN_EMAIL", "superadmin@devsocial.com")
-    SUPERADMIN_PASSWORD: str = os.getenv("SUPERADMIN_PASSWORD", "SuperAdminPassword123!")
+    SUPERADMIN_NAME: str = "Super Admin"
+    SUPERADMIN_EMAIL: str = "superadmin@devsocial.com"
+    SUPERADMIN_PASSWORD: str = "SuperAdminPassword123!"
 
     # SMTP Mail Credentials
-    EMAIL_SENDER: str = os.getenv("EMAIL_SENDER", "")
-    EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
+    EMAIL_SENDER: Optional[str] = ""
+    EMAIL_PASSWORD: Optional[str] = ""
 
-    class Config:
-        env_file = ".env"
+    # Pydantic v2 Configuration
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",         # Silently ignore unmapped .env variables instead of throwing ValidationError
+        case_sensitive=False
+    )
 
 settings = Settings()
