@@ -1,21 +1,23 @@
-from pydantic import BaseModel, HttpUrl
-from typing import Optional, List, Any, Dict
+from pydantic import BaseModel
+from typing import Optional, Any, Dict
 from datetime import datetime
 
 class ProjectGitHubImport(BaseModel):
     title: str
     description: Optional[str] = None
-    github_url: HttpUrl
+    github_url: str
 
 class ProjectResponse(BaseModel):
     id: int
+    uuid: str
     user_id: int
     title: str
-    description: Optional[str]
+    description: Optional[str] = None
     source_type: str
-    github_url: Optional[str]
-    local_path: str
-    file_tree: List[Dict[str, Any]]
+    github_url: Optional[str] = None
+    disk_directory: str
+    disk_size_bytes: int
+    file_tree: Optional[Dict[str, Any]] = None
     created_at: datetime
     last_synced_at: datetime
 

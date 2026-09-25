@@ -1,1 +1,0 @@
-# Contests, challenges, test suites

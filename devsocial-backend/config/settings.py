@@ -1,1 +1,0 @@
-# Pydantic BaseSettings / environment variables

@@ -12,3 +12,6 @@ gitpython==3.1.42
 redis==5.0.3
 python-multipart==0.0.9
 passlib[bcrypt]==1.7.4
+torch>=2.0.0
+transformers>=4.38.0
+accelerate>=0.26.0

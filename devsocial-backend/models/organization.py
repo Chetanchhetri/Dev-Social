@@ -1,1 +1,0 @@
-# Organizations, colleges, private groups

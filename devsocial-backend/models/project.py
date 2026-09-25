@@ -1,1 +1,0 @@
-# Projects, videos/shorts metadata

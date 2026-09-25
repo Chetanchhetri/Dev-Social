@@ -4,14 +4,16 @@ import zipfile
 import re
 import logging
 import uuid
+import stat
+import subprocess
+import sys
 import unicodedata
 import urllib.parse
 from pathlib import Path
-from typing import Dict, Any, List, Set, Optional
+from typing import Dict, Any, List, NoReturn, Set, Optional
 from fastapi import HTTPException, status, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from git import Repo, GitCommandError
 
 from models.project import Project, ProjectOperation, OperationState
 
@@ -44,7 +46,8 @@ MAX_PATH_LENGTH = 255                            # Max 255 chars for relative pa
 MAX_PROJECT_NAME_LENGTH = 100                    # Max 100 chars for title
 PER_USER_STORAGE_QUOTA_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB quota per user
 MIN_REQUIRED_FREE_DISK_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB free host disk required
-GIT_OPERATION_TIMEOUT_SECONDS = 30              # 30-second timeout for Git operations
+GIT_OPERATION_TIMEOUT_SECONDS = 120             # Wall-clock timeout per Git command
+GIT_MAX_VIRTUAL_MEMORY_BYTES = 1024 * 1024 * 1024  # 1 GB address-space cap for Git child (POSIX only)
 
 
 class GitHubService:
@@ -67,32 +70,45 @@ class GitHubService:
     @staticmethod
     def _parse_and_validate_github_url(url: str) -> str:
         """Strictly parses GitHub repository URLs to require exactly /owner/repo without query or fragments."""
+        if not url or not isinstance(url, str):
+            raise HTTPException(status_code=400, detail="GitHub URL must be a non-empty string.")
+
+        clean_url_str = url.strip()
         try:
-            parsed = urllib.parse.urlparse(url.strip())
+            parsed = urllib.parse.urlparse(clean_url_str)
             if parsed.scheme != "https":
                 raise HTTPException(status_code=400, detail="Only HTTPS GitHub URLs are allowed.")
+            
             if parsed.hostname not in {"github.com", "www.github.com"}:
                 raise HTTPException(status_code=400, detail="Repository host must be github.com.")
+            
             if parsed.username or parsed.password:
                 raise HTTPException(status_code=400, detail="Embedded credentials in URLs are strictly prohibited.")
+            
             if parsed.query or parsed.fragment:
                 raise HTTPException(status_code=400, detail="URL query parameters and fragments are not supported.")
 
             path_parts = [p for p in parsed.path.strip("/").split("/") if p]
             if len(path_parts) != 2:
-                raise HTTPException(status_code=400, detail="GitHub URL must strictly match 'https://github.com/owner/repository'.")
+                raise HTTPException(
+                    status_code=400, 
+                    detail="GitHub URL must strictly match 'https://github.com/owner/repository'."
+                )
 
             owner, repo_name = path_parts[0], path_parts[1]
-            repo_name = repo_name[:-4] if repo_name.endswith(".git") else repo_name
             
+            if repo_name.lower().endswith(".git"):
+                repo_name = repo_name[:-4]
+
             if not re.match(r"^[a-zA-Z0-9_.-]+$", owner) or not re.match(r"^[a-zA-Z0-9_.-]+$", repo_name):
-                raise HTTPException(status_code=400, detail="Invalid characters in GitHub repository path.")
+                raise HTTPException(status_code=400, detail="Invalid characters in GitHub owner or repository name.")
 
             return f"https://github.com/{owner}/{repo_name}.git"
         except HTTPException:
             raise
-        except Exception:
-            raise HTTPException(status_code=400, detail="Malformed GitHub URL provided.")
+        except Exception as e:
+            logger.error(f"[URL_PARSE_ERROR] Failed to parse GitHub URL '{url}': {str(e)}")
+            raise HTTPException(status_code=400, detail="Invalid or malformed GitHub repository URL.")
 
     @classmethod
     def _acquire_project_advisory_lock(cls, db: Session, user_id: int, project_identifier: str):
@@ -153,7 +169,12 @@ class GitHubService:
     ) -> ProjectOperation:
         """Durable quota reservation using db.flush() to retain the transaction lock."""
         try:
-            db.execute(text("SELECT id FROM users WHERE id = :user_id FOR UPDATE"), {"user_id": user_id})
+            user_row = db.execute(text("SELECT id FROM users WHERE id = :user_id FOR UPDATE"), {"user_id": user_id}).fetchone()
+            if not user_row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"User with ID {user_id} does not exist."
+                )
 
             current_usage = cls._calculate_user_disk_usage(db, user_id)
             existing_bytes = 0
@@ -212,7 +233,6 @@ class GitHubService:
             if len(rel_path.parts) > MAX_DIRECTORY_DEPTH:
                 raise HTTPException(status_code=400, detail=f"Directory nesting exceeds limit of {MAX_DIRECTORY_DEPTH} levels.")
 
-            # Strict Root .git Detection Logic
             if is_git and len(rel_path.parts) > 0 and rel_path.parts[0] == ".git":
                 if path.is_file():
                     git_metadata_size += path.stat().st_size
@@ -238,47 +258,119 @@ class GitHubService:
 
         return working_tree_size + git_metadata_size
 
-    @classmethod
-    def _execute_sandboxed_git_clone(cls, repo_url: str, target_dir: Path):
-        """Executes Git clone inside an isolated process environment with system resource limits."""
-        env = {
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    @staticmethod
+    def _safe_rmtree(path: Path):
+        """rmtree that also deletes read-only files (Git pack files on Windows) and never raises."""
+        def _handler(func, target, _exc):
+            try:
+                os.chmod(target, stat.S_IWRITE)
+                func(target)
+            except Exception:
+                pass
+
+        kwargs = {"onexc": _handler} if sys.version_info >= (3, 12) else {"onerror": _handler}
+        shutil.rmtree(path, **kwargs)
+
+    @staticmethod
+    def _sandbox_env() -> Dict[str, str]:
+        """Minimal, hardened environment for Git subprocesses (no user/system Git config, no prompts)."""
+        passthrough = (
+            "PATH", "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "TMPDIR",
+            "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR",
+            "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy",
+        )
+        env = {k: os.environ[k] for k in passthrough if k in os.environ}
+        env.setdefault("PATH", "/usr/bin:/bin")
+        env.update({
             "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": "/dev/null",
-            "GIT_HTTP_LOW_SPEED_LIMIT": "1000",
-            "GIT_HTTP_LOW_SPEED_TIME": str(GIT_OPERATION_TIMEOUT_SECONDS),
+            "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_ALLOW_PROTOCOL": "https",
             "GIT_TERMINAL_PROMPT": "0",
-            "HOME": str(STAGING_ROOT)
-        }
+            "GIT_HTTP_LOW_SPEED_LIMIT": "1000",
+            "GIT_HTTP_LOW_SPEED_TIME": str(GIT_OPERATION_TIMEOUT_SECONDS),
+            "HOME": str(STAGING_ROOT),
+        })
+        return env
 
-        # Apply resource limits on Linux/Unix systems if resource module exists
+    @classmethod
+    def _run_git(cls, args: List[str], cwd: Optional[Path] = None):
+        """Runs one Git command in a hardened subprocess with a timeout and (on POSIX) resource limits."""
+        git_bin = shutil.which("git")
+        if not git_bin:
+            logger.critical("[GIT_NOT_FOUND] The 'git' executable is not available on PATH.")
+            raise HTTPException(status_code=500, detail="Git is not installed on the server.")
+
         preexec_fn = None
         if HAS_RESOURCE_MODULE:
             def process_resource_preexec():
-                resource.setrlimit(resource.RLIMIT_CPU, (30, 35))
-                resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
-                resource.setrlimit(resource.RLIMIT_NPROC, (20, 20))
+                resource.setrlimit(resource.RLIMIT_CPU, (GIT_OPERATION_TIMEOUT_SECONDS, GIT_OPERATION_TIMEOUT_SECONDS + 5))
+                resource.setrlimit(resource.RLIMIT_AS, (GIT_MAX_VIRTUAL_MEMORY_BYTES, GIT_MAX_VIRTUAL_MEMORY_BYTES))
             preexec_fn = process_resource_preexec
 
+        # Config is injected with `git -c` (before the subcommand), never via clone's --config option.
+        command = [
+            git_bin,
+            "-c", f"core.hooksPath={os.devnull}",
+            "-c", "core.symlinks=false",
+            "-c", "core.fsmonitor=false",
+            *args,
+        ]
+
         try:
-            Repo.clone_from(
-                repo_url, 
-                target_dir, 
-                depth=1, 
-                env=env,
-                multi_options=[
-                    "--no-recurse-submodules", 
-                    "--config core.hooksPath=/dev/null",
-                    "--config core.filter=/dev/null",
-                    "--config core.symlinks=false"
-                ],
+            result = subprocess.run(
+                command,
+                cwd=str(cwd) if cwd else None,
+                env=cls._sandbox_env(),
+                capture_output=True,
+                text=True,
+                timeout=GIT_OPERATION_TIMEOUT_SECONDS,
                 preexec_fn=preexec_fn,
-                kill_after_timeout=GIT_OPERATION_TIMEOUT_SECONDS
+                check=False,
             )
-        except GitCommandError as e:
-            logger.error(f"[SANDBOX_GIT_CLONE_FAIL] Sandboxed clone failed: {str(e)}")
-            raise HTTPException(status_code=400, detail="Failed to clone repository inside sandbox.")
+        except subprocess.TimeoutExpired:
+            logger.error(f"[SANDBOX_GIT_TIMEOUT] 'git {args[0]}' exceeded {GIT_OPERATION_TIMEOUT_SECONDS}s.")
+            raise HTTPException(status_code=504, detail="Git operation timed out.")
+        except OSError as e:
+            logger.error(f"[SANDBOX_GIT_SPAWN_FAIL] Could not start git: {e!r}")
+            raise HTTPException(status_code=500, detail="Failed to start Git on the server.")
+
+        if result.returncode != 0:
+            # Full stderr goes to server logs only; clients get a generic message.
+            logger.error(f"[SANDBOX_GIT_FAIL] 'git {args[0]}' exited {result.returncode}: {result.stderr.strip()}")
+            raise HTTPException(
+                status_code=400,
+                detail="Git operation failed. Make sure the repository exists and is public."
+            )
+
+    @classmethod
+    def _execute_sandboxed_git_clone(cls, repo_url: str, target_dir: Path):
+        """Shallow-clones a public repo into an existing empty directory."""
+        cls._run_git([
+            "clone",
+            "--depth", "1",
+            "--single-branch",
+            "--no-tags",
+            "--no-recurse-submodules",
+            "--", repo_url, str(target_dir),
+        ])
+
+    @classmethod
+    def _execute_sandboxed_git_pull(cls, repo_dir: Path):
+        """Fast-forwards an existing shallow clone to the remote HEAD (git clone into a non-empty dir would fail)."""
+        cls._run_git(["fetch", "--depth", "1", "--no-tags", "--no-recurse-submodules", "origin", "HEAD"], cwd=repo_dir)
+        cls._run_git(["reset", "--hard", "FETCH_HEAD"], cwd=repo_dir)
+
+    @classmethod
+    def _abort_operation(cls, db: Session, operation: ProjectOperation, label: str, error: Exception, staging_dir: Path) -> NoReturn:
+        """Rolls back the reservation, cleans staging and re-raises as a client-safe HTTPException."""
+        op_id = operation.id  # read before rollback expunges the pending row
+        db.rollback()
+        logger.error(f"[{label}] Operation {op_id} failed: {error!r}", exc_info=error)
+        if staging_dir.exists():
+            cls._safe_rmtree(staging_dir)
+        if isinstance(error, HTTPException):
+            raise error
+        raise HTTPException(status_code=500, detail="Project operation failed on the server. Check server logs.") from error
 
     @classmethod
     def clone_repository(cls, db: Session, github_url: str, user_id: int, project_title: str) -> Dict[str, Any]:
@@ -329,7 +421,7 @@ class GitHubService:
             db.commit()
 
             if backup_dir.exists():
-                shutil.rmtree(backup_dir, ignore_errors=True)
+                cls._safe_rmtree(backup_dir)
 
             return {
                 "project_id": project.id,
@@ -339,13 +431,7 @@ class GitHubService:
             }
 
         except Exception as e:
-            db.rollback()
-            operation.state = OperationState.FAILED
-            db.commit()
-            logger.error(f"[CLONE_OPERATION_FAILED] Operation {operation.id} failed: {str(e)}")
-            if staging_dir.exists():
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            raise
+            cls._abort_operation(db, operation, "CLONE_OPERATION_FAILED", e, staging_dir)
 
     @classmethod
     def extract_zip_project(cls, db: Session, file: UploadFile, user_id: int, project_title: str) -> Dict[str, Any]:
@@ -481,7 +567,7 @@ class GitHubService:
             db.commit()
 
             if backup_dir.exists():
-                shutil.rmtree(backup_dir, ignore_errors=True)
+                cls._safe_rmtree(backup_dir)
 
             return {
                 "project_id": project.id,
@@ -491,13 +577,7 @@ class GitHubService:
             }
 
         except Exception as e:
-            db.rollback()
-            operation.state = OperationState.FAILED
-            db.commit()
-            logger.error(f"[ZIP_OPERATION_FAILED] Operation {operation.id} failed: {str(e)}")
-            if staging_dir.exists():
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            raise
+            cls._abort_operation(db, operation, "ZIP_OPERATION_FAILED", e, staging_dir)
 
     @classmethod
     def sync_pull_repo(cls, db: Session, project_id: int, user_id: int) -> Dict[str, Any]:
@@ -513,7 +593,6 @@ class GitHubService:
         if not target_dir.exists():
             raise HTTPException(status_code=404, detail="Project storage directory missing.")
 
-        # Pre-Audit Existing Working Tree for Symlinks Before Copying
         cls._validate_directory_structure(target_dir, is_git=True)
 
         cls._acquire_project_advisory_lock(db, user_id, project.title)
@@ -527,7 +606,7 @@ class GitHubService:
         try:
             shutil.copytree(target_dir, staging_dir, symlinks=False)
 
-            cls._execute_sandboxed_git_clone(project.github_url, staging_dir)
+            cls._execute_sandboxed_git_pull(staging_dir)
             operation.state = OperationState.STAGED
             db.flush()
 
@@ -549,7 +628,7 @@ class GitHubService:
             db.commit()
 
             if backup_dir.exists():
-                shutil.rmtree(backup_dir, ignore_errors=True)
+                cls._safe_rmtree(backup_dir)
 
             return {
                 "project_id": project.id,
@@ -559,13 +638,7 @@ class GitHubService:
             }
 
         except Exception as e:
-            db.rollback()
-            operation.state = OperationState.FAILED
-            db.commit()
-            logger.error(f"[PULL_OPERATION_FAILED] Operation {operation.id} failed: {str(e)}")
-            if staging_dir.exists():
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            raise
+            cls._abort_operation(db, operation, "PULL_OPERATION_FAILED", e, staging_dir)
 
     @classmethod
     def build_file_tree(cls, root_path: str, current_depth: int = 0, entry_counter: List[int] = None) -> Dict[str, Any]:
@@ -619,17 +692,15 @@ class GitHubService:
             ProjectOperation.state.in_([OperationState.RESERVED, OperationState.STAGED, OperationState.PROMOTED])
         ).all()}
 
-        # 1. Reconcile Staging Directories
         if STAGING_ROOT.exists():
             for item in STAGING_ROOT.iterdir():
                 if item.is_dir() and item.name not in active_op_ids:
-                    shutil.rmtree(item, ignore_errors=True)
+                    cls._safe_rmtree(item)
                     logger.info(f"[RECONCILIATION_CLEANUP] Purged orphaned staging workspace: {item}")
 
-        # 2. Reconcile Backup Directories
         if BACKUPS_ROOT.exists():
             for item in BACKUPS_ROOT.iterdir():
                 backup_id = item.name.replace("backup_", "")
                 if item.is_dir() and backup_id not in active_op_ids:
-                    shutil.rmtree(item, ignore_errors=True)
+                    cls._safe_rmtree(item)
                     logger.info(f"[RECONCILIATION_CLEANUP] Purged orphaned backup directory: {item}")
