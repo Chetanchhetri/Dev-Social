@@ -1,519 +1,169 @@
-DevSocial Backend 🚀
+# DevSocial Backend 🚀
 
-A secure, AI-powered backend for developer communities, project repositories, media sharing, and local code intelligence.
+DevSocial is a feature-rich, high-performance social and project-management backend built with **FastAPI**, **SQLAlchemy**, **PostgreSQL**, and an integrated **fine-tuned local AI engine**. It empowers developers to host and sync project repositories, share multi-media community posts, and run instant AI-powered code reviews and explanations entirely on-device.
 
-DevSocial Backend is a FastAPI-based backend platform that combines project repository management, community posts, secure media handling, and a locally hosted AI code-review and explanation engine.
+---
 
-The backend is built around FastAPI, SQLAlchemy, PostgreSQL/pgvector, Git, and Hugging Face Transformers, with security-focused controls around repository imports, ZIP extraction, filesystem operations, and project synchronization.
+## 🌟 Key Features
 
-✨ Highlights
+* **Project Repository Management:**
+  * **GitHub Import:** Sandboxed shallow cloning of public GitHub repositories with automated directory auditing.
+  * **ZIP Project Extraction:** Secure upload and extraction of ZIP archives with built-in Zip-Bomb and path traversal protection.
+  * **Git Synchronization:** One-click `git pull` syncing to keep imported projects updated with upstream remote sources.
+  * **Recursive File Tree Indexing:** Builds lightweight JSON file tree structures for frontend visualization.
 
-📦 GitHub repository importing with sandboxed shallow cloning
+* **Community Posts & Multi-Media Hub:**
+  * **Multi-Format Media Attachments:** Support for uploading **Images** (`.jpg`, `.png`, `.webp`, `.gif`), **Videos** (`.mp4`, `.mov`, `.mkv`), **PDFs**, and **Presentations** (`.ppt`, `.pptx`).
+  * **Project & Link Linking:** Connect posts directly to an imported GitHub/ZIP project or external demo URL.
+  * **Text Commentary:** Full support for post body text, code snippets, and markdown responses.
 
-🗜️ Secure ZIP project uploads with path-traversal and Zip-Bomb protections
+* **Integrated AI Code Review & Explainer Engine:**
+  * **Fine-Tuned LLM:** Powered by `chetan272006/Qwen2.5-Coder-3B-Instruct` served locally via Hugging Face Transformers.
+  * **Automated Code Review (`/ai/review`):** Audits code for security vulnerabilities (e.g., SQL injection, hardcoded secrets), performance bottlenecks, and anti-patterns, returning structured JSON scores and issue lists.
+  * **AI Code Explainer (`/ai/explain`):** Generates line-by-line breakdowns, algorithmic logic summaries, and conceptual walkthroughs tailored to specific target audiences (`beginner`, `developer`, `non-technical`).
 
-🔄 Sandboxed Git synchronization for imported repositories
+---
 
-🌳 Recursive project file-tree indexing for frontend visualization
+## 🏗️ Architecture & Security Highlights
 
-📝 Developer community posts with text, code, project, and external-link support
+* **Transactional State Machine:** Manages project lifecycle operations (`CREATED` $\rightarrow$ `RESERVED` $\rightarrow$ `STAGED` $\rightarrow$ `PROMOTED` $\rightarrow$ `COMPLETED`) using PostgreSQL 64-bit advisory locks (`pg_advisory_xact_lock`) to prevent race conditions during concurrent imports.
+* **Isolated Media Namespaces:** Storage is strictly segregated into dedicated, isolated directories:
+  * `uploads/projects/`: Active project files and working trees.
+  * `uploads/posts/`: Community post media attachments.
+  * `uploads/staging/`: Temporary workspaces for safe pre-promotion validation.
+  * `uploads/backups/`: Rolling rollback snapshots during sync operations.
+* **Hardened Sandbox Execution:** Runs Git CLI processes with strict flags (`core.hooksPath=/devnull`, `core.symlinks=false`), low-speed timeouts, and minimal environment variables to block execution of malicious hooks or symbolic link exploits.
+* **Storage Quota & Fail-Closed Guards:** Enforces a 1 GB storage quota per user, 50 MB single-file limits, directory depth caps, and host disk capacity checks.
+* **Cross-Platform Resilience:** Features custom permission handlers (`_safe_rmtree`) with `stat.S_IWRITE` to ensure read-only `.git/objects/pack` files clean up properly on Windows environments.
 
-🖼️ Multi-media uploads for images, videos, PDFs, and presentations
+---
 
-🤖 Local AI code review powered by a fine-tuned Qwen2.5-Coder model
+## 🛠️ Tech Stack
 
-💡 AI code explanations for different audience levels
+* **Framework:** [FastAPI](https://fastapi.tiangolo.com/) (Async web engine, Pydantic v2 validation, automatic OpenAPI generation)
+* **Database & ORM:** [PostgreSQL](https://www.postgresql.org/) (with `pgvector` extension) & [SQLAlchemy 2.0](https://www.sqlalchemy.org/)
+* **AI Model Engine:** [Hugging Face Transformers](https://huggingface.co/docs/transformers/index), [PyTorch](https://pytorch.org/), and `chetan272006/Qwen2.5-Coder-3B-Instruct`
+* **Version Control CLI:** System `git` binary via hardened `subprocess` execution
 
-🔐 Transactional project lifecycle management using PostgreSQL advisory locks
+---
 
-💾 Separated storage namespaces for projects, posts, staging, and backups
+## 📁 Directory Structure
 
-🛡️ Fail-closed storage and filesystem safeguards
-
-🪟 Windows-aware filesystem cleanup for imported Git repositories
-
-🧩 Core Capabilities
-
-1. Project Repository Management
-
-DevSocial provides a controlled workflow for bringing external projects into the platform.
-
-GitHub Import
-
-Imports public GitHub repositories using shallow cloning.
-
-Performs directory and project-structure auditing.
-
-Stores project metadata and a lightweight file-tree representation.
-
-ZIP Project Upload
-
-Accepts project archives as ZIP files.
-
-Validates archive size and structure.
-
-Protects against:
-
-Path traversal
-
-Zip-Bomb style compression abuse
-
-Excessive directory depth
-
-Repository Synchronization
-
-Synchronizes imported repositories with their upstream Git remote.
-
-Uses a staged workflow and backup directories to reduce the impact of failed operations.
-
-File Tree Indexing
-
-Recursively builds lightweight JSON file-tree structures suitable for frontend visualization.
-
-2. Community Posts & Media
-
-Posts can combine developer-oriented content with project references and media.
-
-Supported media includes:
-
-Type
-
-Formats
-
-Images
-
-.jpg, .png, .webp, .gif
-
-Videos
-
-.mp4, .mov, .mkv
-
-Documents
-
-.pdf
-
-Presentations
-
-.ppt, .pptx
-
-Posts can also contain:
-
-Text commentary
-
-Code snippets
-
-Markdown content
-
-Links to imported projects
-
-External demo URLs
-
-3. AI Code Review & Explanation
-
-DevSocial integrates a locally served fine-tuned language model:
-
-Model: chetan272006/Qwen2.5-Coder-3B-Instruct
-
-The model is served through the Hugging Face Transformers stack.
-
-AI Code Review
-
-POST /ai/review
-
-The reviewer analyzes submitted code for issues such as:
-
-Security vulnerabilities
-
-SQL injection
-
-Hardcoded secrets
-
-Performance problems
-
-Common programming anti-patterns
-
-The endpoint returns structured review information including a score, detected issues, and suggested improvements.
-
-AI Code Explanation
-
-POST /ai/explain
-
-The explainer can provide:
-
-Line-by-line explanations
-
-Algorithm and logic summaries
-
-Architectural walkthroughs
-
-Conceptual explanations
-
-Supported audience targets include:
-
-beginner
-
-developer
-
-non-technical
-
-🏗️ Architecture
-
-At a high level, DevSocial follows a layered FastAPI architecture:
-
-                         ┌──────────────────────┐
-                         │      Client / UI      │
-                         └──────────┬───────────┘
-                                    │
-                                    ▼
-                         ┌──────────────────────┐
-                         │      FastAPI API     │
-                         │   Routes + Schemas   │
-                         └──────────┬───────────┘
-                                    │
-              ┌─────────────────────┼─────────────────────┐
-              │                     │                     │
-              ▼                     ▼                     ▼
-      ┌───────────────┐     ┌───────────────┐     ┌───────────────┐
-      │ Project       │     │ Community     │     │ AI Services   │
-      │ Services      │     │ Post Services │     │ Qwen2.5-Coder  │
-      └───────┬───────┘     └───────┬───────┘     └───────────────┘
-              │                     │
-              └──────────────┬──────┘
-                             ▼
-                    ┌──────────────────┐
-                    │ PostgreSQL       │
-                    │ + pgvector       │
-                    └──────────────────┘
-
-                    Filesystem Storage
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-          projects       posts       staging
-                                      │
-                                      ▼
-                                   backups
-
-🔐 Security Architecture
-
-Security is a core part of the project-import and media-storage workflows.
-
-Transactional Project State Machine
-
-Project operations move through a controlled lifecycle:
-
-CREATED
-   │
-   ▼
-RESERVED
-   │
-   ▼
-STAGED
-   │
-   ▼
-PROMOTED
-   │
-   ▼
-COMPLETED
-
-PostgreSQL pg_advisory_xact_lock is used to coordinate concurrent project operations and reduce race conditions during imports and synchronization.
-
-Isolated Storage Namespaces
-
-uploads/
-├── projects/    # Active project files and working trees
-├── posts/       # Community media
-├── staging/     # Temporary validation workspaces
-└── backups/     # Rollback snapshots
-
-Separating these namespaces helps prevent temporary files, uploaded media, and active repositories from being mixed together.
-
-Hardened Git Execution
-
-Git operations are executed through controlled subprocesses with security-focused settings including:
-
-core.hooksPath=/dev/null
-
-core.symlinks=false
-
-Low-speed/time-out protections
-
-Minimal process environment variables
-
-These controls are intended to reduce exposure to malicious Git hooks and symbolic-link-based filesystem attacks.
-
-Storage & Resource Guards
-
-The backend enforces limits including:
-
-1 GB storage quota per user
-
-50 MB single-file limit
-
-Directory-depth limits
-
-Host disk-capacity checks
-
-Fail-closed validation during storage operations
-
-Cross-Platform Cleanup
-
-The _safe_rmtree cleanup mechanism accounts for read-only Git files such as .git/objects/pack, particularly on Windows environments.
-
-🛠️ Tech Stack
-
-Layer
-
-Technology
-
-API Framework
-
-FastAPI
-
-Validation
-
-Pydantic v2
-
-Database
-
-PostgreSQL
-
-Vector Extension
-
-pgvector
-
-ORM
-
-SQLAlchemy 2.0
-
-AI Runtime
-
-Hugging Face Transformers
-
-ML Framework
-
-PyTorch
-
-Code Model
-
-chetan272006/Qwen2.5-Coder-3B-Instruct
-
-Version Control
-
-Git CLI
-
-Containerization
-
-Docker / Docker Compose
-
-Language
-
-Python 3.10+
-
-📁 Project Structure
-
+```text
 devsocial-backend/
 ├── config/
-│   └── settings.py              # Pydantic settings & environment configuration
-│
+│   └── settings.py          # Pydantic BaseSettings & Environment configuration
 ├── db/
-│   └── session.py               # Database engine, sessions & seed functions
-│
+│   └── session.py           # Database engine, session pooling, and seed functions
 ├── models/
-│   ├── user.py                  # User & UserRole ORM models
-│   ├── project.py               # Project & operation state models
-│   └── post.py                  # Post & media attachment models
-│
+│   ├── user.py              # User & UserRole ORM models
+│   ├── project.py           # Project & ProjectOperation state machine models
+│   └── post.py              # Community Post & Media attachment models
 ├── routes/
-│   ├── auth_routes.py           # Authentication & user endpoints
-│   ├── project_routes.py        # GitHub import, ZIP & synchronization
-│   ├── post_routes.py           # Posts & media upload endpoints
-│   └── ai_routes.py             # AI review & explanation endpoints
-│
+│   ├── auth_routes.py       # Authentication & user endpoints
+│   ├── project_routes.py    # GitHub import, ZIP upload, and repo sync endpoints
+│   ├── post_routes.py       # Community post creation & media upload endpoints
+│   └── ai_routes.py         # AI Code Reviewer & Explainer endpoints
 ├── schemas/
-│   ├── project_schema.py        # Project validation schemas
-│   ├── post_schema.py           # Post & media schemas
-│   └── ai_schema.py             # AI request & response schemas
-│
+│   ├── project_schema.py    # Project request & response validation schemas
+│   ├── post_schema.py       # Post & Media attachment validation schemas
+│   └── ai_schema.py         # AI request & response validation schemas
 ├── services/
-│   ├── github_service.py        # Git import, staging & reconciliation
-│   ├── post_service.py          # Media validation & storage
-│   └── ai_code_service.py       # Local Qwen2.5-Coder inference pipeline
-│
-├── uploads/
-│   ├── projects/                # Active project directories
-│   ├── posts/                   # Community media
-│   ├── staging/                 # Temporary staging directories
-│   └── backups/                 # Rollback backups
-│
-├── app.py                       # FastAPI entry point
-├── docker-compose.yml           # PostgreSQL + pgvector setup
-├── requirements.txt             # Python dependencies
-└── README.md                    # Project documentation
+│   ├── github_service.py    # Repository cloning, staging, state machine, and storage reconciliation
+│   ├── post_service.py      # Media classification, size validation, and post storage
+│   └── ai_code_service.py   # Singleton pipeline for local Qwen2.5-Coder LLM inference
+├── uploads/                 # Local media storage root
+│   ├── projects/            # Active project directories
+│   ├── posts/               # Community media uploads
+│   ├── staging/             # Temporary staging directories
+│   └── backups/             # Rollback backup directories
+├── app.py                   # FastAPI main entry point & router registration
+├── docker-compose.yml       # Docker container setup for PostgreSQL + pgvector
+├── requirements.txt         # Python dependencies
+└── README.md                # Project documentation
+```
 
 🚀 Getting Started
-
 Prerequisites
-
-Make sure the following are available:
-
 Python 3.10+
 
-Docker & Docker Compose
+Docker & Docker Compose (for running PostgreSQL)
 
-Git CLI available on the system PATH
+Git CLI installed and available on host system PATH
 
-Sufficient system memory for local model inference
+RAM / VRAM: Minimum ~4 GB free RAM (for running CPU inference) or 4 GB+ VRAM (for CUDA GPU acceleration)
 
-Optional CUDA-compatible GPU for accelerated inference
+Installation & Local Setup
+Clone the Repository:
 
-Note: Actual AI inference requirements depend on the model configuration, quantization, device, and runtime settings. The local Qwen2.5-Coder model is the most resource-intensive component of the stack.
-
-1. Clone the Repository
-
-git clone https://github.com/Chetanchhetri/devsocial-backend.git
+Bash
+git clone [https://github.com/Chetanchhetri/devsocial-backend.git](https://github.com/Chetanchhetri/devsocial-backend.git)
 cd devsocial-backend
+Create and Activate Virtual Environment:
 
-2. Create a Virtual Environment
+Linux/macOS:
 
-Linux / macOS
-
+Bash
 python3 -m venv .venv
 source .venv/bin/activate
+Windows (PowerShell):
 
-Windows PowerShell
-
+PowerShell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+Install Dependencies:
 
-3. Install Dependencies
-
+Bash
 pip install -r requirements.txt
+Start PostgreSQL Database via Docker Compose:
 
-4. Start PostgreSQL
-
-Start the PostgreSQL + pgvector environment using Docker Compose:
-
+Bash
 docker-compose up -d
+Configure Environment Variables:
+Create a .env file in the root directory:
 
-Verify that the database container is running before starting the API.
-
-5. Configure Environment Variables
-
-Create a .env file in the project root:
-
+Code snippet
 DATABASE_URL=postgresql://postgres:postgrespassword@localhost:5432/devsocial_db
-
 MEDIA_DIR=uploads
-
 SUPERADMIN_NAME=Superadmin
 SUPERADMIN_EMAIL=admin@devsocial.local
 SUPERADMIN_PASSWORD=securepassword123
+Start the FastAPI Backend Server:
 
-Security note
-
-Do not commit .env files or production credentials to Git.
-
-Use strong, unique credentials when deploying outside a local development environment.
-
-6. Start the Backend
-
+Bash
 python app.py
-
-The API will be available at:
-
-http://localhost:8000
-
-📚 API Documentation
-
-Once the server is running:
+Access Interactive API Documentation:
 
 Swagger UI: http://localhost:8000/docs
 
 ReDoc: http://localhost:8000/redoc
 
-These interfaces provide interactive API documentation generated by FastAPI.
+📖 API Endpoint Reference
+1. Projects & Code Storage (/projects)
+Method	Endpoint	Description
+POST	/projects/import-github?user_id=1	Clones a public GitHub repo, audits structure, indexes file tree, and saves metadata.
+POST	/projects/upload-zip	Uploads and extracts a project .zip archive with size/compression checks.
+POST	/projects/{project_id}/sync?user_id=1	Triggers a sandboxed git pull operation to synchronize with remote origin.
+2. Community Posts & Media (/posts)
+Method	Endpoint	Description
+POST	/posts/create?user_id=1	Creates a new post with optional Images, Videos, PDFs, PPTs, text, and project links.
+GET	/posts/{post_id}	Fetches a post by ID with media attachment paths and metadata.
+3. AI Code Reviewer & Explainer (/ai)
+Method	Endpoint	Description
+POST	/ai/review	Audits code snippet for bugs, vulnerabilities, and score using fine-tuned Qwen2.5-Coder.
+POST	/ai/explain	Explains code architecture, logic, and line-by-line flow tailored for a target audience.
+💡 Usage Examples
+AI Code Review Request (POST /ai/review)
+Request Body:
 
-🔌 API Reference
-
-Projects
-
-Method
-
-Endpoint
-
-Purpose
-
-POST
-
-/projects/import-github?user_id=1
-
-Import a public GitHub repository, audit its structure, and index its file tree
-
-POST
-
-/projects/upload-zip
-
-Upload and extract a ZIP project with security checks
-
-POST
-
-/projects/{project_id}/sync?user_id=1
-
-Synchronize an imported repository with its remote origin
-
-Community Posts
-
-Method
-
-Endpoint
-
-Purpose
-
-POST
-
-/posts/create?user_id=1
-
-Create a post with text, media, project references, or external links
-
-GET
-
-/posts/{post_id}
-
-Retrieve a post and its media metadata
-
-AI
-
-Method
-
-Endpoint
-
-Purpose
-
-POST
-
-/ai/review
-
-Review code for vulnerabilities, bugs, and other issues
-
-POST
-
-/ai/explain
-
-Explain code architecture, logic, and execution flow
-
-🤖 Example: AI Code Review
-
-Request
-
-POST /ai/review
-
+JSON
 {
   "code_snippet": "def get_user_data(user_id):\n    query = f'SELECT * FROM users WHERE id = {user_id}'\n    return db.execute(query).fetchall()",
   "programming_language": "python"
 }
+Response Output:
 
-Example Response
-
+JSON
 {
   "model": "chetan272006/Qwen2.5-Coder-3B-Instruct",
   "status": "FAILED",
@@ -527,146 +177,8 @@ Example Response
     "Consider using ORM libraries like SQLAlchemy for database interactions."
   ]
 }
-
-The example demonstrates how the AI reviewer can identify unsafe SQL construction and provide remediation suggestions.
-
-🔄 Project Import Workflow
-
-A typical repository import follows this sequence:
-
-GitHub / ZIP
-     │
-     ▼
-Input Validation
-     │
-     ▼
-Staging Workspace
-     │
-     ▼
-Security / Structure Checks
-     │
-     ▼
-Project Promotion
-     │
-     ▼
-Metadata + File Tree
-     │
-     ▼
-Completed Project
-
-Using a staging area allows validation to happen before project files are promoted into the active project namespace.
-
-🛡️ Security Checklist
-
-The current architecture includes protections for:
-
-ZIP path traversal
-
-ZIP compression abuse / Zip-Bomb checks
-
-Git hook execution mitigation
-
-Git symbolic-link restrictions
-
-Storage quotas
-
-Individual file-size limits
-
-Directory-depth restrictions
-
-Disk-capacity checks
-
-Isolated staging directories
-
-Rollback backup directories
-
-Transaction-level advisory locking
-
-Controlled Git subprocess execution
-
-Security controls should still be reviewed and tested before production deployment.
-
-🧪 Development
-
-For local development, the recommended workflow is:
-
-1. Start PostgreSQL / pgvector
-2. Activate the Python virtual environment
-3. Install dependencies
-4. Configure .env
-5. Start FastAPI
-6. Open /docs
-7. Exercise project, post, and AI endpoints
-
-Because repository import and synchronization interact with the host filesystem and Git executable, development environments should be treated as trusted infrastructure.
-
-⚠️ Production Considerations
-
-Before deploying DevSocial publicly, review at minimum:
-
-Authentication and authorization around every project and media operation
-
-File upload limits and MIME/content validation
-
-Filesystem permissions
-
-Database credentials and secrets management
-
-Reverse-proxy configuration
-
-HTTPS/TLS
-
-Rate limiting
-
-AI inference resource limits
-
-Logging and audit trails
-
-Container and host isolation
-
-Resource exhaustion protections
-
-Backup and restore procedures
-
-The repository-import functionality in particular should be deployed with appropriate filesystem isolation because it processes externally supplied project content.
-
 🤝 Contributing
+Contributions are welcome! Please feel free to submit a Pull Request or open an Issue for bug reports and feature requests.
 
-Contributions are welcome.
-
-Typical contribution workflow:
-
-git checkout -b feature/your-feature
-# make your changes
-git add .
-git commit -m "feat: describe your change"
-git push origin feature/your-feature
-
-Then open a Pull Request describing:
-
-What changed
-
-Why the change was needed
-
-Any security implications
-
-API changes
-
-Testing performed
-
-Bug reports and feature requests can also be submitted through GitHub Issues.
-
-📄 License
-
-This project is available under the MIT License.
-
-See the repository's LICENSE file for the complete license text.
-
-👨‍💻 Project
-
-DevSocial Backend
-
-Built with:
-
-FastAPI · PostgreSQL · SQLAlchemy · pgvector · PyTorch · Transformers · Git
-
+📜 License
+This project is open-source and available under the MIT License.
