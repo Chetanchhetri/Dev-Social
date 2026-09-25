@@ -154,29 +154,7 @@ POST	/ai/review	Audits code snippet for bugs, vulnerabilities, and score using f
 POST	/ai/explain	Explains code architecture, logic, and line-by-line flow tailored for a target audience.
 💡 Usage Examples
 AI Code Review Request (POST /ai/review)
-Request Body:
 
-JSON
-{
-  "code_snippet": "def get_user_data(user_id):\n    query = f'SELECT * FROM users WHERE id = {user_id}'\n    return db.execute(query).fetchall()",
-  "programming_language": "python"
-}
-Response Output:
-
-JSON
-{
-  "model": "chetan272006/Qwen2.5-Coder-3B-Instruct",
-  "status": "FAILED",
-  "score": 50,
-  "issues": [
-    "SQL Injection Vulnerability",
-    "Insecure Database Query String Interpolation"
-  ],
-  "suggestions": [
-    "Use parameterized queries to prevent SQL injection.",
-    "Consider using ORM libraries like SQLAlchemy for database interactions."
-  ]
-}
 🤝 Contributing
 Contributions are welcome! Please feel free to submit a Pull Request or open an Issue for bug reports and feature requests.
 
